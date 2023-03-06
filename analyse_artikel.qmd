@@ -1,0 +1,927 @@
+---
+title: "Possessive Dative im Deutschen Textarchiv"
+author: "Andreas Blombach, Bettina Lindner-Bornemann"
+bibliography: references.bib
+lang: de
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-tools: true
+    theme: yeti
+    df-print: paged
+    fig-width: 12
+    fig-height: 8
+    embed-resources: true
+---
+
+Dieses Dokument enthält Analysen für unseren Artikel [@lbb2023], die hier zum Teil etwas ausführlicher ausfallen.
+
+```{r}
+#| message: false
+#| warning: false
+library(tidyverse)
+library(tidytable)
+library(yardstick)
+library(readxl)
+library(irr)
+library(patchwork)
+library(scales)
+```
+
+```{r}
+# bereits annotierte Excel-Dateien einlesen:
+ann_a <- read_xlsx("data/annotation_a_sample.xlsx",
+                     col_types = c("text", "text", "text", "text", "text",
+                                   "text", "text", "text", "text", "text",
+                                   "text", "text", "text", "text", "text",
+                                   "text", "guess", "text", "text", "text",
+                                   "text", "text", "text", "text"))
+ann_a <- ann_a %>%
+  mutate(textClassDTA = replace_na(textClassDTA, ""),
+         textClass = replace_na(textClass, ""))
+ann_b <- read_xlsx("data/annotation_b_sample.xlsx",
+                     col_types = c("text", "text", "text", "text", "text",
+                                   "text", "text", "text", "text", "text",
+                                   "text", "text", "text", "text", "text",
+                                   "text", "guess", "text", "text", "text",
+                                   "text", "text", "text", "text"))
+ann_b <- ann_b %>%
+  mutate(textClassDTA = replace_na(textClassDTA, ""),
+         textClass = replace_na(textClass, ""))
+
+combined <- ann_a |>
+  inner_join(ann_b,
+             by = c("match", "sentence", "pos_before", "pos_after", "token1",
+                    "token2", "token3", "date", "collection", "author",
+                    "title", "textClass", "bibl", "textClassDTA"))
+```
+
+Stichprobe, adjudizierte Annotation:
+```{r}
+gold <- read_excel("data/annotation_gold_sample.xlsx")
+```
+
+
+## Inter-Annotator-Agreement
+Annotierte Kategorien bei Annotator A:
+```{r}
+ann_a |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe", "na", "n"),
+                       labels = c("dp: Dativus possessivus",
+                                  "dpe: Dat. poss. mit Ellipse",
+                                  "aj: synt. mehrdeutig, Tendenz zu Dat.",
+                                  "a: syntaktisch mehrdeutig",
+                                  "an: synt. mehrdeutig, Tendenz zu nein",
+                                  "agp/dp: synt. mehrdeutig; Gen./Dat. poss.",
+                                  "gp/dp: Gen./Dat. poss.",
+                                  "gpe/dpe: Gen./Dat. poss. mit Ellipse",
+                                  "agp: synt. mehrdeutig, evtl. Gen. poss.",
+                                  "gp: Genitivus possessivus",
+                                  "gpe: Gen. poss. mit Elipse",
+                                  "na: nein, aber",
+                                  "n: nein"
+                                  ))) |>
+  pull(cat) |>
+  fct_count(sort = TRUE) |>
+  mutate(percentage = n / sum(n) * 100)
+```
+
+
+Annotierte Kategorien bei Annotator B:
+```{r}
+ann_b |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe", "na", "n"),
+                       labels = c("dp: Dativus possessivus",
+                                  "dpe: Dat. poss. mit Ellipse",
+                                  "aj: synt. mehrdeutig, Tendenz zu Dat.",
+                                  "a: syntaktisch mehrdeutig",
+                                  "an: synt. mehrdeutig, Tendenz zu nein",
+                                  "agp/dp: synt. mehrdeutig; Gen./Dat. poss.",
+                                  "gp/dp: Gen./Dat. poss.",
+                                  "gpe/dpe: Gen./Dat. poss. mit Ellipse",
+                                  "agp: synt. mehrdeutig, evtl. Gen. poss.",
+                                  "gp: Genitivus possessivus",
+                                  "gpe: Gen. poss. mit Elipse",
+                                  "na: nein, aber",
+                                  "n: nein"
+                                  ))) |>
+  pull(cat) |>
+  fct_count(sort = TRUE) |>
+  mutate(percentage = n / sum(n) * 100)
+```
+
+Übereinstimmung hierbei, wobei `"n"` ("nein") und `"na"` ("nein, aber") zusammengefasst werden^[Das Label `"na"` wurde vorrangig von einem der beiden
+Annotatoren vergeben, um Fälle zu markieren, die zwar eindeutig keinen
+possessiven Dativ enthalten (i.d.R. aufgrund der Verbvalenz), in denen
+semantisch aber dennoch eine possessive Lesart möglich ist. Eine gründliche
+Sichtung dieser Annotationen, um sie für künftige Forschung nutzbar zu machen,
+steht noch aus.]:
+```{r}
+combined |>
+  mutate(cat.x = ifelse(cat.x == "na", "n", cat.x),
+         cat.y = ifelse(cat.y == "na", "n", cat.y)) |>
+  select(cat.x, cat.y) |>
+  agree()
+```
+
+Cohens Kappa:
+```{r}
+combined |>
+  mutate(cat.x = ifelse(cat.x == "na", "n", cat.x),
+         cat.y = ifelse(cat.y == "na", "n", cat.y)) |>
+  select(cat.x, cat.y) |>
+  kappa2()
+```
+
+Ein Wert von 0,76 gilt als beachtliche Übereinstimmung.
+
+Gewichtet man diese Matrix nach Ähnlichkeit der Labels [@cohen1968; @fleissetal1969], erhält man ein noch höheres Kappa (die genaue Gewichtung
+enthält natürlich ein Element der Willkür):
+```{r}
+conf_mat <- combined |>
+  mutate.(cat.x = cat.x |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n")),
+          cat.y = cat.y |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n"))) |>
+  select.(cat.x, cat.y) |>
+  table()
+
+# 13x13 Matrix -> entsprechende Gewichtsmatrix
+# 1: perfekte Übereinstimmung, 0.8: 80% Übereinstimmung, usw.
+weight_mat <- matrix(c(1, .8, .8, .6, .4, .4, .4, .4, .2, .2, .2, .2, 0,
+                       .8, 1, .8, .6, .4, .4, .6, .4, .2, .4, .2, .2, 0,
+                       .8, .8, 1, .8, .6, .6, .6, .4, .2, .2, .2, .4, .2,
+                       .6, .6, .8, 1, .8, .6, .6, .4, .2, .2, .2, .6, .4,
+                       .4, .4, .6, .8, 1, .6, .6, .4, .2, .2, .2, .8, .6,
+                       .4, .4, .6, .6, .6, 1, .8, .8, .8, .8, .6, .8, .4,
+                       .4, .6, .6, .6, .6, .8, 1, .6, .4, .8, .4, .6, .4,
+                       .4, .4, .4, .4, .4, .8, .6, 1, .6, .6, .8, .6, .4,
+                       .2, .2, .2, .2, .2, .8, .4, .6, 1, .8, .8, .2, .2,
+                       .2, .4, .2, .2, .2, .8, .8, .6, .8, 1, .6, 0, .2,
+                       .2, .2, .2, .2, .2, .6, .4, .8, .8, .6, 1, .2, .4,
+                       .2, .2, .4, .6, .8, .8, .6, .6, .2, 0, .2, 1, 1,
+                       0, 0, .2, .4, .6, .4, .4, .4, .2, .2, .4, 1, 1),
+                     nrow = 13, ncol = 13)
+
+conf_mat |> DescTools::CohenKappa(weights = weight_mat)
+```
+
+
+
+Übereinstimmung bei den Belegen, für die von mindestens einem Annotator etwas
+anderes als "n" oder "na" annotiert wurde:
+```{r}
+combined |>
+  mutate(cat.x = ifelse(cat.x == "na", "n", cat.x),
+         cat.y = ifelse(cat.y == "na", "n", cat.y)) |>
+  filter(!(cat.x == "n" & cat.y == "n")) |>
+  select(cat.x, cat.y) |>
+  agree()
+```
+
+```{r}
+combined |>
+  mutate(cat.x = ifelse(cat.x == "na", "n", cat.x),
+         cat.y = ifelse(cat.y == "na", "n", cat.y)) |>
+  filter(!(cat.x == "n" & cat.y == "n")) |>
+  select(cat.x, cat.y) |>
+  kappa2()
+```
+
+Ein Wert von 0,5 gilt nach Cohen als moderate Übereinstimmung.
+
+
+Gewichtetes Kappa hierfür:
+```{r}
+conf_mat <- combined |>
+  filter(!(cat.x %chin% c("n", "na") & cat.y %chin% c("n", "na"))) |>
+  mutate.(cat.x = cat.x |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n")),
+          cat.y = cat.y |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n"))) |>
+  select.(cat.x, cat.y) |>
+  table()
+
+# 13x13 Matrix -> entsprechende Gewichtsmatrix
+# 1: perfekte Übereinstimmung, 0.8: 80% Übereinstimmung, usw.
+weight_mat <- matrix(c(1, .8, .8, .6, .4, .4, .4, .4, .2, .2, .2, .2, 0,
+                       .8, 1, .8, .6, .4, .4, .6, .4, .2, .4, .2, .2, 0,
+                       .8, .8, 1, .8, .6, .6, .6, .4, .2, .2, .2, .4, .2,
+                       .6, .6, .8, 1, .8, .6, .6, .4, .2, .2, .2, .6, .4,
+                       .4, .4, .6, .8, 1, .6, .6, .4, .2, .2, .2, .8, .6,
+                       .4, .4, .6, .6, .6, 1, .8, .8, .8, .8, .6, .8, .4,
+                       .4, .6, .6, .6, .6, .8, 1, .6, .4, .8, .4, .6, .4,
+                       .4, .4, .4, .4, .4, .8, .6, 1, .6, .6, .8, .6, .4,
+                       .2, .2, .2, .2, .2, .8, .4, .6, 1, .8, .8, .2, .2,
+                       .2, .4, .2, .2, .2, .8, .8, .6, .8, 1, .6, 0, .2,
+                       .2, .2, .2, .2, .2, .6, .4, .8, .8, .6, 1, .2, .4,
+                       .2, .2, .4, .6, .8, .8, .6, .6, .2, 0, .2, 1, 1,
+                       0, 0, .2, .4, .6, .4, .4, .4, .2, .2, .4, 1, 1),
+                     nrow = 13, ncol = 13)
+
+conf_mat |> DescTools::CohenKappa(weights = weight_mat)
+```
+
+
+
+
+Konfusionsmatrix/Kreuztabelle:
+```{r}
+#| message: false
+confmat <- combined |>
+  mutate.(cat.x = cat.x |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n")),
+          cat.y = cat.y |> factor(levels = c("dp", "dpe", "aj", "a", "an",
+                                             "gp/dp", "gpe/dpe", "agp/dp",
+                                             "gp", "gpe", "agp", "na", "n"))) |>
+  select.(cat.x, cat.y) |>
+  conf_mat(truth = cat.x, estimate = cat.y,
+           dnn = c("Annotator B", "Annotator A"))
+
+confmat |>
+  autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(low = "#EEEEEE",
+                      high = "#555555",
+                      limits = c(NA, 250), oob = oob_squish)
+```
+
+## DTA-Korpus (insgesamt)
+Das Deutsche Textarchiv ist nicht balanciert (was sich durch den Einbezug der
+Erweiterungen wahrscheinlich noch verstärkt). Das gilt es bei der Analyse der
+absoluten Häufigkeiten zu berücksichtigen.
+
+Wir fassen unsere Belege daher in 50-Jahres-Intervallen zusammen und
+normalisieren die Häufigkeiten anhand der Gesamttokenmengen in diesen
+Intervallen.
+
+Wie man an diesen Gesamttokenmengen sehen kann, gibt es im DTA aktuell nur sehr
+wenige Texte von vor 1600, während das 19. Jahrhundert stark überrepräsentiert
+ist. Die sehr wenigen Texte aus dem 20. Jahrhundert fallen nicht ins Gewicht
+(und sollten wahrscheinlich eigentlich gar nicht im Korpus enthalten sein).
+
+Auch die Verteilung auf die vier Haupttextgenres fällt über die Zeit sehr
+unterschiedlich aus (man beachte bspw. den Einbruch der Gebrauchsliteratur
+zwischen 1750 und 1850).
+```{r}
+#| warning: false
+cnts <- readRDS("data/dta_cnts_genre_year.RDS")
+levels(cnts$Date_50) <- c("1450–1499", "1500–1549",
+                          "1550–1599", "1600–1649",
+                          "1650–1699", "1700–1749",
+                          "1750–1799", "1800–1849",
+                          "1850–1899", "1900–1949",
+                          "1950–1999")
+
+cnts2 <- cnts %>% group_by(Date_50, First_genre) %>%
+  summarise(Count = sum(Count))
+
+options(scipen = 999)
+cnts2 %>%
+  mutate.(Count = Count / 1e6) %>%
+  drop_na.() %>%
+  ggplot(aes(x = Date_50, y = Count,
+                     colour = First_genre, group = First_genre)) +
+  geom_line(size = 1) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Millionen Tokens", colour = "Genre") +
+  scale_color_viridis_d()
+```
+
+
+## Analyse der adjudizierten Daten (Golddaten)
+Wie oft wurde jede Kategorie vergeben?
+```{r}
+gold |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe", "na", "n"),
+                       labels = c("dp: Dativus possessivus",
+                                  "dpe: Dat. poss. mit Ellipse",
+                                  "aj: synt. mehrdeutig, Tendenz zu Dat.",
+                                  "a: syntaktisch mehrdeutig",
+                                  "an: synt. mehrdeutig, Tendenz zu nein",
+                                  "agp/dp: synt. mehrdeutig; Gen./Dat. poss.",
+                                  "gp/dp: Gen./Dat. poss.",
+                                  "gpe/dpe: Gen./Dat. poss. mit Ellipse",
+                                  "agp: synt. mehrdeutig, evtl. Gen. poss.",
+                                  "gp: Genitivus possessivus",
+                                  "gpe: Gen. poss. mit Elipse",
+                                  "na: nein, aber",
+                                  "n: nein"
+                                  ))) |>
+  pull(cat) |>
+  fct_count(sort = TRUE) |>
+  mutate.(percentage = n / sum(n) * 100)
+```
+
+
+Vor 1550 gibt es nur zwei Belege (aus derselben Quelle von 1465), die mit einer relevanten Kategorie annotiert wurden (allerdings beide als possessive Dative!), weshalb wir diese in den folgenden Zeitverlaufsgraphiken ausblenden:
+```{r}
+gold |>
+  filter.(date < 1550 & !cat %chin% c("n", "na"))
+gold |>
+  filter.(date < 1550 & !cat %chin% c("n", "na")) |>
+  pull(sentence)
+```
+Ebenso blenden wir vier Belege ab 1900 aus (ein possessiver Dativ, drei
+syntaktisch ambige Sätze); wie oben erwähnt, gibt es kaum Texte aus dieser Zeit
+im DTA. Die Entfernung all dieser Belege erleichtert die Interpretation der
+Zeitverlaufsgraphiken.
+```{r}
+gold |>
+  filter.(date >= 1900 & !cat %chin% c("n", "na"))
+gold |>
+  filter.(date >= 1900 & cat == "dp") |>
+  pull(sentence)
+```
+
+
+
+```{r}
+gold2 <- gold |>
+  filter.(date >= 1550 & date < 1900) |>
+  mutate.(Date_50 = cut(date, breaks = seq(1550, 1900, by = 50)),
+          First_genre = str_remove(textClass, "::.*"),
+          First_genre = na_if(First_genre, ""))
+
+levels(gold2$Date_50) <- c("1550–1599", "1600–1649",
+                          "1650–1699", "1700–1749",
+                          "1750–1799", "1800–1849",
+                          "1850–1899")
+```
+
+```{r}
+gold2 <- gold2 |>
+  filter.(!cat %chin% c("n", "na")) |>
+  select.(match, cat, genus_possessor, genus_possessum, animacy_possessor, animacy_possessum, sentence, date, token1, token2, token3, Date_50, First_genre)
+```
+
+
+### Absolute Häufigkeiten
+Absolute Häufigkeiten sind aufgrund des unbalancierten Korpus mit etwas Vorsicht
+zu betrachten.
+```{r}
+cnts3 <- cnts2 |>
+  summarise(Count = sum(Count))
+
+gold_cat_sum <- gold2 |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  ))) |>
+  dplyr::count(Date_50, cat, .drop = FALSE)
+
+gold_cat_sum <- gold_cat_sum |>
+  left_join.(cnts3, by = "Date_50") |>
+  mutate.(FpMT = n / Count * 1e6)
+```
+```{r, fig.width=12}
+p1 <- gold_cat_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = n,
+             colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Absolute Häufigkeit", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  scale_colour_viridis_d() +
+  theme(legend.key.width = unit(3, "cm"))
+p1
+```
+
+### Normalisierte Häufigkeiten
+Hier werden die Häufigkeiten für jedes 50-Jahre-Intervall anhand der
+Gesamttokenmenge dieses Zeitraums im Korpus (s.o.) normalisiert. Da es sich bei
+den hier vorliegenden Daten nur um eine Stichprobe aus der Treffermenge handelt,
+haben wir es hier nicht mit den tatsächlichen relativen Häufigkeiten im Korpus
+zu tun -- diese dürften noch um einiges höher liegen.
+```{r, fig.width=12}
+p2 <- gold_cat_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  scale_colour_viridis_d() +
+  theme(legend.key.width = unit(3, "cm"))
+
+p2zoom <- gold_cat_sum |>
+  drop_na() |>
+  filter.(cat != "Genitivus possessivus") |> 
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  scale_colour_viridis_d() +
+  theme(legend.key.width = unit(3, "cm"))
+
+p2
+
+p2zoom
+```
+In der ersten Graphik erkennt man auf den ersten Blick die überraschende
+Häufigkeit des possessiven Genitivs zwischen 1650 und 1700 sowie den
+anschließend rasanten Niedergang. Es fällt auch auf, dass davor überhaupt keine
+Belege vorliegen (Erstbeleg in der Stichprobe: 1621), während sowohl possessive
+Dative als auch syntaktisch ambige, aber als possessive Dative deutbare Belege
+existieren. Auch kasusambige Belege gibt es erst ab der ersten Hälfte des 17.
+Jahrhunderts (Erstbeleg: 1603). Diese Daten sprechen tendenziell eher dagegen,
+dass der possessive Dativ aus dativisch interpretierten possessiven Genitiven
+entstanden sein könnte; wahrscheinlicher dünkt uns noch, dass der possessive
+Genitiv als Hyperkorrektur des possessiven Dativs aufgekommen sein könnte.
+
+Die zweite Graphik ist eine Wiederholung der ersten, nur ohne possessive
+Genitive, was die Häufigkeiten der anderen Formen im Zeitverlauf hoffentlich
+deutlicher hervortreten lässt.
+
+Die Beleglage in der zweiten Hälfte des 16. Jahrhunderts sollte allerdings auch
+nicht überinterpretiert werden -- dafür ist das Korpus in dieser Zeit schlicht
+zu klein.
+
+```{r, fig.width=12}
+#| include: false
+p1 + p2 + plot_layout(nrow = 2, guides = "collect")
+```
+
+
+```{r, fig.width=12}
+#| include: false
+# für die Publikation (Breite 800, Höhe 400)
+p2 <- gold_cat_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  scale_colour_grey() +
+  theme_bw() +
+  theme(legend.key.width = unit(2, "cm"))
+
+p2zoom <- gold_cat_sum |>
+  drop_na() |>
+  filter.(cat != "Genitivus possessivus") |> 
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  scale_colour_grey() +
+  theme_bw() +
+  theme(legend.key.width = unit(2, "cm"))
+
+p2
+
+p2zoom
+ggsave("figures/fig1_print.svg", p2zoom, width = 8.4, height = 4.2)
+ggsave("figures/fig2_print.svg", p2, width = 8.4, height = 4.2)
+ggsave("figures/fig1_print.pdf", p2zoom, width = 8.4, height = 4.2)
+ggsave("figures/fig2_print.pdf", p2, width = 8.4, height = 4.2)
+```
+
+
+### Nach Genus des (möglichen) Possessors
+Nur bei wenigen Belegen kommt der (mögliche) Possessor im Neutrum oder mit nicht
+feststellbarem Genus (wie bei Pluralwörtern wie *Leute*) vor. Die Ergebnisse
+hier sind unspektakulär: Eindeutige possessive Dative und Genitive gibt es
+praktisch nur bei Maskulina und Neutra, kasusambige Formen bei Feminina. Die
+eindeutigen Belege bei letzteren sind primär auf Pluralformen zurückzuführen.
+```{r, fig.width=12}
+gold_cat_gen_sum <- gold2 |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  )),
+          genus_possessor = factor(genus_possessor)) |>
+  dplyr::count(Date_50, cat, genus_possessor, .drop = FALSE)
+
+gold_cat_gen_sum <- gold_cat_gen_sum |>
+  left_join.(cnts3, by = "Date_50") |>
+  mutate.(FpMT = n / Count * 1e6)
+
+gold_cat_gen_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat)) +
+  geom_line(size = 2) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie") +
+  scale_color_viridis_d() +
+  facet_wrap(~ genus_possessor)
+```
+
+Nur Maskulina und Feminina:
+```{r, fig.width=12}
+gold_cat_gen_sum |>
+  filter(genus_possessor %in% c("m", "f")) |>
+  mutate(genus_possessor = factor(genus_possessor, labels = c("Possessor: feminin", "Possessor: maskulin"))) |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat)) +
+  geom_line(size = 2, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie") +
+  scale_color_viridis_d() +
+  facet_wrap(vars(genus_possessor), nrow = 2)
+```
+
+### Nach Genres
+```{r, fig.width=12}
+gold_cat_genre_sum <- gold2 |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  )),
+          First_genre = factor(First_genre),
+          genus_possessor = factor(genus_possessor)) |>
+  dplyr::count(Date_50, cat, First_genre, .drop = FALSE) |>
+  left_join.(cnts2) |>
+  mutate.(Count = replace_na(Count, 0),
+          FpMT = n / Count * 1e6)
+
+gold_cat_genre_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = n, colour = cat, group = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Absolute Häufigkeit", colour = "Trefferkategorie") +
+  scale_colour_viridis_d() +
+  facet_wrap(vars(First_genre))
+
+gold_cat_genre_sum |>
+  drop_na() |>
+  filter.(First_genre != "Zeitung") |>
+  ggplot(aes(x = Date_50, y = FpMT, colour = cat, group = cat)) +
+  geom_line(size = 1.5, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie") +
+  scale_colour_viridis_d() +
+  facet_wrap(vars(First_genre))
+```
+```{r}
+#| include: false
+# für die Publikation:
+
+sample_timeline_genres_relativ <- gold_cat_genre_sum |>
+  drop_na() |>
+  filter.(First_genre != "Zeitung") |>
+  ggplot(aes(x = Date_50, y = FpMT, colour = cat, group = cat, linetype = cat)) +
+  geom_line(size = 1.2, alpha = .8) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie", linetype = "Trefferkategorie") +
+  facet_wrap(vars(First_genre)) +
+  scale_colour_grey() +
+  theme_bw() +
+  theme(legend.key.width = unit(2, "cm"),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = -45, hjust = 0),
+        plot.margin = margin(l = .1, t = .1, b = .1, r = 1, unit = "cm")) +
+  guides(colour = guide_legend(ncol = 2))
+
+ggsave("figures/fig3_print.svg", sample_timeline_genres_relativ, width = 8.4, height = 4.2)
+ggsave("figures/fig3_print.pdf", sample_timeline_genres_relativ, width = 8.4, height = 4.2)
+```
+
+
+
+Für die normalisierten Häufigkeiten wurde das Zeitungsgenre aufgrund der
+geringen Trefferzahlen ausgelassen.
+
+Dass possessive Dative und syntaktisch ambige Formen in der zweiten Hälfte des
+16. Jahrhunderts nur in der Gebrauchsliteratur vorkommen, liegt lediglich daran,
+dass aus dieser Zeitspanne keine anderen Genres im DTA vertreten sind.
+
+Danach kommen possessive Dative in allen drei Genres vor, am häufigsten in der
+Belletristik -- wo sie auch im 19. Jahrhundert noch einmal ein kurzes Revival
+erleben, überwiegend in wörtlicher Rede, was wohl der Charakterisierung der
+Figuren dienen dürfte.
+
+Possessive Genitive kommen ebenfalls in allen drei Genres vor, wobei ihr
+Aufstieg und Fall in der Belletristik besonders ausgeprägt erscheint.
+
+
+### Nach Belebtheit des (möglichen) Possessors
+```{r, fig.width=12}
+gold_cat_ani_sum <- gold2 |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  )),
+          genus_possessor = factor(genus_possessor),
+          animacy_possessor = factor(animacy_possessor,
+                                     levels = c("abstrakt",
+                                                "konkret",
+                                                "konkret (Körperteil)",
+                                                "konkret (Ort)",
+                                                "menschlich",
+                                                "menschlich (Kollektivum)",
+                                                "pflanzlich",
+                                                "pflanzlich (Kollektivum)",
+                                                "tierisch",
+                                                "tierisch (Kollektivum)",
+                                                "übermenschlich",
+                                                "übermenschlich (negativ)",
+                                                "übermenschlich (positiv)"
+                                     ),
+                                     labels = c("abstrakt",
+                                                "konkret",
+                                                "konkret",
+                                                "konkret",
+                                                "menschlich",
+                                                "menschlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "übermenschlich",
+                                                "übermenschlich",
+                                                "übermenschlich")
+                                     )) |>
+  dplyr::count(Date_50, cat, animacy_possessor, .drop = FALSE)
+
+gold_cat_ani_sum <- gold_cat_ani_sum |>
+  left_join.(cnts3, by = "Date_50") |>
+  mutate.(FpMT = n / Count * 1e6)
+
+gold_cat_ani_sum |>
+  drop_na() |>
+  ggplot(aes(x = Date_50, y = FpMT,
+             colour = cat, group = cat)) +
+  geom_line(size = 2) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Zeitraum", y = "Häufigkeit (pro Million Tokens)", colour = "Trefferkategorie") +
+  scale_color_viridis_d() +
+  facet_wrap(~ animacy_possessor)
+```
+
+Diese Graphiken sind leider nicht sehr übersichtlich. Hier deshalb noch einmal
+die Anteile der Belebtheitsstufen pro Belegkategorie (mit absoluten Häufigkeiten
+über den jeweiligen Säulen):
+```{r, fig.width=12}
+gold_ani <- gold |>
+  filter.(!cat %chin% c("n", "na")) |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  )),
+          animacy_possessor = factor(animacy_possessor,
+                                     levels = c("abstrakt",
+                                                "konkret",
+                                                "konkret (Körperteil)",
+                                                "konkret (Ort)",
+                                                "menschlich",
+                                                "menschlich (Kollektivum)",
+                                                "pflanzlich",
+                                                "pflanzlich (Kollektivum)",
+                                                "tierisch",
+                                                "tierisch (Kollektivum)",
+                                                "übermenschlich",
+                                                "übermenschlich (negativ)",
+                                                "übermenschlich (positiv)"
+                                     ),
+                                     labels = c("abstrakt",
+                                                "konkret",
+                                                "konkret",
+                                                "konkret",
+                                                "menschlich",
+                                                "menschlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "übermenschlich",
+                                                "übermenschlich",
+                                                "übermenschlich")
+                                     ) |>
+            fct_relevel("menschlich", after = 3)) |>
+  dplyr::count(cat, animacy_possessor, .drop = FALSE)
+
+gold_ani |>
+  drop_na() |>
+  mutate.(Anteil = n / sum(n), .by = cat) |>
+  ggplot(aes(x = cat, y = Anteil,
+             fill = animacy_possessor)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = .9), vjust = -.5) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Trefferkategorie", y = "Anteil (an Trefferkategorie)", fill = "Belebtheit") +
+  scale_fill_viridis_d()
+```
+
+```{r}
+#| include: false
+# für die Publikation:
+sample_belebtheit_possessor <- gold_ani |>
+  drop_na() |>
+  mutate.(Anteil = n / sum(n), .by = cat) |>
+  ggplot(aes(x = cat, y = Anteil,
+             fill = animacy_possessor)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = .9), vjust = -.5, size = 3) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Trefferkategorie", y = "Anteil (an Trefferkategorie)", fill = "Belebtheit") +
+  scale_fill_grey() +
+  ylim(0, .8) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))
+
+ggsave("figures/fig4_print.svg", sample_belebtheit_possessor, width = 8.4, height = 4.2)
+ggsave("figures/fig4_print.pdf", sample_belebtheit_possessor, width = 8.4, height = 4.2)
+```
+
+
+Für uns eindeutige possessive Dative weisen in der Stichprobe allesamt einen
+belebten Possessor auf. Auch sonst dominieren belebte Erstglieder, bei den
+weniger klaren Fällen kommen allerdings auch häufiger konkrete und sogar einige
+abstrakte vor.
+
+Beim possessiven Genitiv gibt es interessanterweise auch einige Fälle abstrakter
+Possessoren:
+```{r}
+gold |>
+  filter.(cat %in% c("gp", "gpe") & animacy_possessor == "abstrakt") |>
+  pull(sentence)
+```
+
+
+### Nach Belebtheit des (möglichen) Possessums
+```{r, fig.width=12}
+gold_ani2 <- gold |>
+  filter.(!cat %chin% c("n", "na")) |>
+  mutate.(cat = factor(cat,
+                       levels = c("dp", "dpe", "aj", "a", "an",
+                                  "agp/dp", "gp/dp", "gpe/dpe",
+                                  "agp", "gp", "gpe"),
+                       labels = c("Dativus possessivus",
+                                  "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                  "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                  "syntaktisch mehrdeutig",
+                                  "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                  "synt. mehrdeutig; Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",
+                                  "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                  "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                  "Genitivus possessivus",
+                                  "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                                  )),
+          animacy_possessum = factor(animacy_possessum,
+                                     levels = c("abstrakt",
+                                                "konkret",
+                                                "konkret (Körperteil)",
+                                                "konkret (Ort)",
+                                                "menschlich",
+                                                "menschlich (Kollektivum)",
+                                                "pflanzlich",
+                                                "pflanzlich (Kollektivum)",
+                                                "tierisch",
+                                                "tierisch (Kollektivum)",
+                                                "übermenschlich",
+                                                "übermenschlich (negativ)",
+                                                "übermenschlich (positiv)"
+                                     ),
+                                     labels = c("abstrakt",
+                                                "konkret",
+                                                "konkret",
+                                                "konkret",
+                                                "menschlich",
+                                                "menschlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "tierisch / pflanzlich",
+                                                "übermenschlich",
+                                                "übermenschlich",
+                                                "übermenschlich")
+                                     ) |>
+            fct_relevel("menschlich", after = 3)) |>
+  dplyr::count(cat, animacy_possessum, .drop = FALSE)
+
+gold_ani2 |>
+  drop_na() |>
+  mutate.(Anteil = n / sum(n), .by = cat) |>
+  ggplot(aes(x = cat, y = Anteil,
+             fill = animacy_possessum)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = .9), vjust = -.5) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Trefferkategorie", y = "Anteil (an Trefferkategorie)", fill = "Belebtheit") +
+  scale_fill_viridis_d()
+```
+```{r}
+#| include: false
+# für die Publikation:
+sample_belebtheit_possessum <- gold_ani2 |>
+  drop_na() |>
+  mutate.(Anteil = n / sum(n), .by = cat) |>
+  ggplot(aes(x = cat, y = Anteil,
+             fill = animacy_possessum)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = .9), vjust = -.5, size = 3) +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0)) +
+  labs(x = "Trefferkategorie", y = "Anteil (an Trefferkategorie)", fill = "Belebtheit") +
+  scale_fill_grey() +
+  ylim(0, .75) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))
+
+ggsave("figures/fig5_print.svg", sample_belebtheit_possessum, width = 8.4, height = 4.2)
+ggsave("figures/fig5_print.pdf", sample_belebtheit_possessum, width = 8.4, height = 4.2)
+```
+
+
+Auffällig ist hier die umso stärkere Tendenz zum konkreten oder belebten
+Possessum, je klarer ein possessiver Dativ vorliegt. Dies gilt auch für die
+kasusambigen Formen, weniger ausgeprägt allerdings für possessive Genitive.
+
+Für die weitere Forschung dürfte es interessant sein, die Abstrakta genauer zu
+bestimmen. So haben wir bspw. Wörter wie *Seele* oder *Verstand* als abstrakt
+kategorisiert, die, wie uns scheint, eine ähnliche Nähe zu Personen aufweisen
+wie konkrete Körperteile. Auch deverbale Substantive, die beobachtbare
+Tätigkeiten bezeichnen (wie *Gang* oder *Schluchzen*) sind wohl als deutlich
+weniger abstrakt einzustufen als etwa *Freiheit* oder *Eigentum*.
+
+Vorstellbar wären bspw. Unterkategorien wie diese:
+
+- abstrakt (Eigenschaft): *Frömmigkeit*, *Ehre*, *Ruf*, *Masse*
+- abstrakt (wahrnehmbare Tätigkeit):	*Lauf*, *Arbeit*, *Gesang*
+- abstrakt (Innenleben): *Seele*, *Gedanken*, *Liebe*, *Begierde*
+
+
+## Literatur
+
+::: {#refs}
+:::
