@@ -1,5 +1,5 @@
 # Daten und Analysen zum possessiven Dativ
-Hier finden sich Belege aus dem [Deutschen Textarchiv (DTA)](https://www.deutschestextarchiv.de), die von zwei unabhängigen Annotatoren daraufhin untersucht wurden, ob sie possessive Dative (oder verwandte Formen) enthalten. Eine detaillierte Beschreibung unserer Untersuchung finden Sie in unserem Artikel *„Ach [...] was wars so dunkel in dem Wolf seinem Leib!“ Zur diachronen Entwicklung des possessiven Dativs* [BibTeX](CITATION.bib).
+Hier finden sich Belege aus dem [Deutschen Textarchiv (DTA)](https://www.deutschestextarchiv.de), die von zwei unabhängigen Annotatoren daraufhin untersucht wurden, ob sie possessive Dative (oder verwandte Formen) enthalten. Eine detaillierte Beschreibung unserer Untersuchung finden Sie in unserem Artikel *„Ach [...] was wars so dunkel in dem Wolf seinem Leib!“ Zur diachronen Entwicklung des possessiven Dativs* ([BibTeX](CITATION.bib)).
 
 ## Dateien
 - [annotation_gold_sample.xlsx](data/annotation_gold_sample.xlsx) enthält unseren Goldstandard (Belege, überprüfte Annotation, Metadaten).
