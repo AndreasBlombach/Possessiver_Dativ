@@ -1,0 +1,675 @@
+---
+title: "Diatopische Verteilung possessiver Dative im Deutschen Textarchiv"
+author: "Andreas Blombach, Bettina Lindner-Bornemann"
+date: last-modified
+date-format: long
+bibliography: references.bib
+lang: de
+format:
+  html:
+    self-contained: true
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    code-tools: true
+    theme: yeti
+    df-print: paged
+    fig-width: 8
+    fig-height: 6
+    link-external-icon: true
+---
+
+## Setup
+```{r}
+#| message: false
+#| warning: false
+library(leaflet)
+library(eurostat)
+library(sf)
+library(tmap)
+library(rnaturalearth)
+library(tidyverse)
+library(tidytable)
+library(readxl)
+library(ggmap)
+library(gganimate)
+
+# folgende Funktion wird benötigt, um Hintergründe von Stadia Maps verwenden zu können
+# Code von https://stackoverflow.com/questions/47749078/how-to-put-a-geom-sf-produced-map-on-top-of-a-ggmap-produced-raster
+ggmap_bbox <- function(map) {
+  if (!inherits(map, "ggmap")) stop("map must be a ggmap object")
+  # Extract the bounding box (in lat/lon) from the ggmap to a numeric vector, 
+  # and set the names to what sf::st_bbox expects:
+  map_bbox <- setNames(unlist(attr(map, "bb")), 
+                       c("ymin", "xmin", "ymax", "xmax"))
+  
+  # Convert the bbox to an sf polygon, transform it to 3857, 
+  # and convert back to a bbox (convoluted, but it works)
+  bbox_3857 <- st_bbox(st_transform(st_as_sfc(st_bbox(map_bbox, crs = 4326)), 3857))
+  
+  # Overwrite the bbox of the ggmap object with the transformed coordinates 
+  attr(map, "bb")$ll.lat <- bbox_3857["ymin"]
+  attr(map, "bb")$ll.lon <- bbox_3857["xmin"]
+  attr(map, "bb")$ur.lat <- bbox_3857["ymax"]
+  attr(map, "bb")$ur.lon <- bbox_3857["xmax"]
+  map
+}
+
+# Shapefiles für Länder und NUTS-1:
+world <- ne_countries(scale = "medium", returnclass = "sf")
+nuts1 <- get_eurostat_geospatial(resolution = 60, 
+                                 nuts_level = 1, 
+                                 year = 2021,
+                                 make_valid = TRUE)
+```
+
+
+
+Dateien einlesen:
+```{r}
+dta_geo <- read_xlsx("data/dta_geo.xlsx") # https://github.com/AndreasBlombach/dta_geo/blob/main/dta_geo.xlsx
+sample_gold <- read_excel("data/annotation_gold_sample_relevant.xlsx")
+```
+
+Annotierte Kategorien in der Stichprobe für die Auswertung vereinfachen:
+```{r}
+sample_gold <- sample_gold |>
+  mutate(cat = factor(cat,
+                      levels = c("dp", "dpe", "aj", "a", "an",
+                                 "agp/dp", "gp/dp", "gpe/dpe",
+                                 "agp", "gp", "gpe"),
+                      labels = c("Dativus possessivus",
+                                 "Dativus possessivus",#"Dat. poss. mit Ellipse",
+                                 "synt. mehrdeutig, Tendenz zu Dat.",#"synt. mehrdeutig, Tendenz zu Dat. poss.",
+                                 "syntaktisch mehrdeutig",
+                                 "synt. mehrdeutig, Tendenz zu nein",#"synt. mehrdeutig, Tendenz zu nein",
+                                 "synt. mehrdeutig; Gen./Dat. poss.",
+                                 "Gen./Dat. poss.",
+                                 "Gen./Dat. poss.",#"Gen./Dat. poss. mit Ellipse",
+                                 "Genitivus possessivus",#"synt. mehrdeutig, evtl. Gen. poss.",
+                                 "Genitivus possessivus",
+                                 "Genitivus possessivus"#"Gen. poss. mit Elipse"
+                      )))
+```
+
+
+## Datenüberblick
+Tokenverteilung im DTA (+ Ergänzungskorpus) nach Subkorpora:
+```{r}
+dta_geo |>
+  summarise(tokens = sum(tokens), .by = "subcorpus") |>
+  arrange(desc(tokens))
+```
+Anzahl der Texte:
+```{r}
+nrow(dta_geo)
+```
+Georeferenzierte Texte (über Geburtsort des Autors, Wirkungsort, Geburtsort des Übersetzers, Übersetzungsort oder Erscheinungs-/Druckort (bei älteren Werken)):
+```{r}
+dta_geo |> filter(!is.na(longitude)) |> nrow()
+```
+
+Davon über den Geburtsort des jeweiligen Autors:
+```{r}
+dta_geo |> filter(!is.na(longitude), coords_birth) |> nrow()
+```
+
+Wie viele Tokens sind damit erfasst?
+```{r}
+bref <- dta_geo |> filter(!is.na(longitude), coords_birth) |> pull(tokens) |> sum()
+bref
+```
+
+
+Dass so viele Texte nicht über den Geburtsort des Autors referenziert werden konnten, liegt überwiegend an den vielen Einzelausgaben von Zeitungen:
+```{r}
+dta_geo |> filter(!is.na(longitude), str_detect(textClass, "Zeitung"), !coords_birth) |> nrow()
+```
+
+Sonstige Texte, die nicht über Geburtsorte der Autoren referenziert werden konnten:
+```{r}
+dta_geo |> filter(!is.na(longitude), !str_detect(textClass, "Zeitung"), !coords_birth) |> nrow()
+```
+
+Wie viele Tokens kommen bei all diesen Texten zusammen?
+```{r}
+nbref <- dta_geo |> filter(!is.na(longitude), !coords_birth) |> pull(tokens) |> sum()
+nbref
+```
+
+Das macht also `r round(nbref / (bref + nbref) * 100, 2)` % aller Tokens aus Texten aus, die georeferenziert werden konnten.
+
+
+
+## Ausschlusskriterien
+- keine Texte ab 1900
+- keine Lexika
+- keine Zeitschriften
+- natürlich nur Texte, die georeferenziert werden konnten
+
+```{r}
+dta_geo <- dta_geo |>
+  filter(year < 1900,
+         !str_detect(textClass, "Lexikon|Wörterbuch|Zeitschrift"),
+         !is.na(longitude))
+```
+
+Damit verbleiben noch `r nrow(dta_geo)` Texte.
+
+
+Ein Problem, das sich nicht ohne weiteres lösen lässt, betrifft das Übergewicht einzelner Autoren im Korpus. So schlagen die sechs Bände von Alfred Edmund Brehms (aus Renthendorf in Thüringen) "Illustrirtes Thierleben" mit `r ((dta_geo |> filter(author_id == "118514814") |> pull(tokens) |> sum()) / 1e6) |> round(2)` Mio. Tokens zu Buche, die 35 Werke von Johann Friedrich Blumenbach (mit allein 16 Auflagen des "Handbuchs der Naturgeschichte") aus Gotha kommen auf `r ((dta_geo |> filter(author_id == "116208503") |> pull(tokens) |> sum()) / 1e6) |> round(2)` Mio. Tokens, und die Textmenge im Elsass wird durch acht Werke von Philipp Jakob Spener mit insgesamt `r ((dta_geo |> filter(author_id == "118616099") |> pull(tokens) |> sum()) / 1e6) |> round(2)` Mio. Tokens erheblich aufgebläht. Während sich das Blumenbach-Problem noch durch Ausschluss des entsprechenden Subkorpus lösen ließe, sind die anderen Texte überwiegend im DTA-Kernkorpus enthalten.
+
+
+
+## Diatopische Token-Verteilung im Korpus
+
+### Geo-Kachelung
+```{r}
+#| message: false
+# Limits für die Karte (schließen lediglich zwei Texte von Germano Wanderley aus Recife, Brasilien, aus):
+dta_min_x <- -7
+dta_max_x <- 35
+dta_min_y <- 43
+dta_max_y <- 60
+
+# Konvertierung der Daten ins sf-Format:
+dta_geo_sf <- dta_geo |>
+  filter(!is.na(longitude) & !is.na(latitude)) |>
+  st_as_sf(coords = c("longitude", "latitude"))
+st_crs(dta_geo_sf) <- 4326
+
+# Hexagone:
+hex_grid <- dta_geo_sf |>
+  st_make_grid(square = FALSE, cellsize = 1.2)
+
+hex_grid <- hex_grid |>
+  st_sf() |>
+  dplyr::mutate(hex_id = 1:dplyr::n())
+
+tokens_by_hex <- dta_geo_sf |>
+  st_join(hex_grid) |>
+  summarise(tokens = sum(tokens), .by = hex_id)
+
+hex_grid_tokens <- hex_grid |>
+  dplyr::left_join(tokens_by_hex) |>
+  dplyr::mutate(tokens = replace_na(tokens, 0)) |>
+  dplyr::filter(tokens > 0)
+```
+
+Berücksichtigte Texte im gesamten Betrachtungszeitraum (ca. 1450 bis 1900):
+```{r}
+#| warning: false
+# Marker für wichtige Städte:
+# cities <- dta_geo_sf |> dplyr::filter(place_of_birth %chin% c("München", "Nürnberg", "Stuttgart", "Berlin", "Augsburg", "Köln", "Frankfurt am Main", "Leipzig", "Hamburg", "Bern", "Zürich", "Dresden", "Wien", "Darmstadt", "Lübeck", "Gießen", "Straßburg", "Königsberg", "Magdeburg", "Nimptsch", "Breslau", "Basel", "Bremen", "Halle (Saale)", "Mainz", "Hannover", "Danzig", "Düsseldorf", "Trier", "Braunschweig", "Hannover", "Kassel")) |> dplyr::distinct(place_of_birth, .keep_all = TRUE)
+cities <- dta_geo_sf |>
+  dplyr::filter(place_of_birth %chin% c("Nürnberg", "Stuttgart", "Berlin", "Augsburg", "Köln", "Frankfurt am Main", "Leipzig", "Hamburg", "Wien", "Königsberg", "Breslau", "Basel", "Danzig", "Zürich", "Dresden", "Straßburg")) |> dplyr::distinct(place_of_birth, .keep_all = TRUE) |>
+  dplyr::mutate(place_of_birth = ifelse(place_of_birth == "Frankfurt am Main", "Frankfurt", place_of_birth))
+
+dta_plot_hex <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(dta_min_x, dta_max_x)) +
+  scale_y_continuous(limits = c(dta_min_y, dta_max_y)) +
+  geom_sf(aes(fill = tokens / 1e6), alpha = .7, colour = "black", data = hex_grid_tokens) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  scale_fill_viridis_c(direction = -1) +
+  geom_sf(size = 1, alpha = .7, colour = "black", data = cities) +
+  ggrepel::geom_label_repel(
+    data = cities,
+    aes(label = place_of_birth, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    size = 3.5,
+    alpha = .7,
+    box.padding = .1,
+    label.padding = .1
+  ) +
+  labs(fill = "Mio. Tokens",
+       x = "Längengrad", y = "Breitengrad") +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)))
+dta_plot_hex
+
+# ggsave("figures/a2_fig1_print.svg", dta_plot_hex, width = 7.6, height = 4.2)
+```
+
+Mit Hintergrund von Stadia Maps:
+```{r}
+#| message: false
+register_stadiamaps(key = read_lines("stadiamaps_api.txt")) # API-Key für Stadia Maps
+base_dta <- get_stadiamap(bbox = c(left = dta_min_x - 1,
+                                   bottom = dta_min_y - 1,
+                                   right = dta_max_x + 1,
+                                   top = dta_max_y + 1),
+                          zoom = 7, maptype = "stamen_terrain_background")
+base_dta <- ggmap_bbox(base_dta)
+
+dta_dist <- ggmap(base_dta, darken = c(.4, "white")) +
+  coord_sf(crs = st_crs(3857)) +
+  geom_sf(data = st_transform(world, 3857),
+          fill = NA, inherit.aes = FALSE,
+          linewidth = 1) +
+  geom_sf(aes(fill = tokens / 1e6), alpha = .7, colour = "black",
+          data = hex_grid_tokens |>
+            st_transform(3857),
+          inherit.aes = FALSE) +
+  scale_fill_viridis_c(direction = -1) +
+  labs(x = "Längengrad", y = "Breitengrad",
+       fill = "Mio. Tokens",
+       title = "Tokens im DTA nach Herkunft der Autoren")
+dta_dist
+```
+
+
+Nur Texte bis 1700:
+```{r}
+#| message: false
+#| warning: false
+dta_geo_pre1700 <- dta_geo |> filter(year < 1700)
+
+tokens_by_hex_pre1700 <- dta_geo_sf |>
+  dplyr::filter(year < 1700) |>
+  st_join(hex_grid) |>
+  summarise(tokens = sum(tokens), .by = hex_id)
+
+min_x <- min(dta_geo_pre1700$longitude) - .5
+max_x <- max(dta_geo_pre1700$longitude) + .5
+min_y <- min(dta_geo_pre1700$latitude) - .5
+max_y <- max(dta_geo_pre1700$latitude) + .5
+
+hex_grid_tokens_pre1700 <- hex_grid |>
+  dplyr::left_join(tokens_by_hex_pre1700) |>
+  dplyr::mutate(tokens = replace_na(tokens, 0)) |>
+  dplyr::filter(tokens > 0)
+
+dta_plot_hex_pre1700 <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_sf(aes(fill = tokens / 1e6), alpha = .7, colour = "black", data = hex_grid_tokens_pre1700) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  scale_fill_viridis_c(direction = -1) +
+  geom_sf(size = 1, alpha = .7, colour = "black", data = cities) +
+  ggrepel::geom_label_repel(
+    data = cities,
+    aes(label = place_of_birth, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    size = 3.5,
+    alpha = .7,
+    box.padding = .1,
+    label.padding = .1
+  ) +
+  labs(fill = "Mio. Tokens",
+       x = "Längengrad", y = "Breitengrad") +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)))
+dta_plot_hex_pre1700
+
+# ggsave("figures/a2_fig1_pre1700_print.svg", dta_plot_hex_pre1700, width = 7.6, height = 4.2)
+```
+
+Man sieht bei beiden Betrachtungszeiträumen recht deutlich eine Token-Konzentration entlang einer Achse von der Deutschschweiz bis Berlin. Bei den älteren Texten spielt zudem Schlesien eine größere Rolle.
+
+
+### NUTS-1-Klassifikation
+Hier wieder bis 1900:
+```{r}
+#| warning: false
+#| message: false
+nuts1_tokens <- dta_geo_sf |>
+  st_join(nuts1) |> # Achtung: einige wenige Punkte an Grenzen werden zwei Regionen zugeordnet
+  distinct(basename, .keep_all = TRUE) |> # etwas unsaubere Entfernung der eben entstandenen Dopplungen
+  summarise(tokens = sum(tokens), .by = NUTS_ID) |>
+  drop_na()
+
+dta_plot_nuts1 <- ggplot() +
+  geom_sf(aes(fill = tokens / 1e6), alpha = .7, colour = "black", data = nuts1 |> dplyr::left_join(nuts1_tokens)) +
+  scale_x_continuous(limits = c(dta_min_x, dta_max_x)) +
+  scale_y_continuous(limits = c(dta_min_y, dta_max_y)) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  scale_fill_viridis_c(direction = -1) +
+  geom_sf(size = 1, alpha = .7, colour = "black", data = cities) +
+  ggrepel::geom_label_repel(
+    data = cities,
+    aes(label = place_of_birth, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    size = 3.5,
+    alpha = .7,
+    box.padding = .1,
+    label.padding = .1
+  ) +
+  labs(fill = "Mio. Tokens",
+       x = "Längengrad", y = "Breitengrad") +
+  theme(panel.background = element_rect(fill = rgb(0, 0, 0, 0)))
+dta_plot_nuts1
+
+# ggsave("figures/a2_fig2_print.svg", dta_plot_nuts1, width = 7.6, height = 4.2)
+```
+
+## Räumliche Verteilung der annotierten Kategorien
+Bis 1900:
+```{r}
+#| message: false
+sample_geo <- sample_gold |>
+  select(match:sentence, basename) |>
+  inner_join(dta_geo, by = "basename")
+
+min_x <- min(sample_geo$longitude) - .5
+max_x <- max(sample_geo$longitude) + .5
+min_y <- min(sample_geo$latitude) - .5
+max_y <- max(sample_geo$latitude) + .5
+
+sample_geo_sf <- sample_geo |>
+  st_as_sf(coords = c("longitude", "latitude"))
+st_crs(sample_geo_sf) <- 4326
+
+sample_by_hex <- sample_geo_sf |>
+  dplyr::mutate(cat = factor(cat,
+                             levels = c("Dativus possessivus",
+                                          "synt. mehrdeutig, Tendenz zu Dat.",
+                                          "syntaktisch mehrdeutig",
+                                          "synt. mehrdeutig, Tendenz zu nein",
+                                          "synt. mehrdeutig; Gen./Dat. poss.",
+                                          "Gen./Dat. poss.",
+                                          "Genitivus possessivus"),
+                             labels = c("Dativus possessivus",
+                                          "Dativus possessivus", # synt. mehrdeutig, Tendenz zu Dat. poss.
+                                          "syntaktisch mehrdeutig",
+                                          "synt. mehrdeutig, Tendenz zu nein",
+                                          "syntaktisch mehrdeutig", # synt. mehrdeutig, Gen./Dat. poss.
+                                          "Gen./Dat. poss.",
+                                          "Genitivus possessivus")
+                             )) |>
+  st_join(hex_grid) |>
+  select(-tokens) |>
+  left_join(tokens_by_hex, by = "hex_id") |>
+  summarise(rel_freq_pmt = n() / tokens * 1e6, .by = c(hex_id, cat))
+
+hex_grid_sample <- hex_grid |>
+  dplyr::left_join(sample_by_hex) |>
+  dplyr::mutate(rel_freq_pmt = replace_na(rel_freq_pmt, 0)) |>
+  dplyr::filter(rel_freq_pmt > 0)
+
+dat_freq <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_sf(aes(fill = rel_freq_pmt), alpha = .7, colour = "black",
+          data = hex_grid_sample |>
+            dplyr::filter(cat == "Dativus possessivus")) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  geom_count(aes(x = longitude, y = latitude, colour = cat),
+             alpha = .7,
+             data = sample_geo |>
+               filter(cat %in% c("Dativus possessivus", "synt. mehrdeutig, Tendenz zu Dat."))) +
+  scale_fill_viridis_c(direction = -1) +
+  scale_colour_grey(start = 0, end = .5) +
+  scale_radius(range = c(1, 4), breaks = round) +
+  labs(fill = "Relative Häufigkeit (pMT)",
+       x = "Längengrad", y = "Breitengrad",
+       size = "Absolute Häufigkeit",
+       colour = "Kategorie") +
+  guides(colour = guide_legend(order = 1),
+         size = guide_legend(order = 2)) +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)),
+        legend.key = element_rect(fill = "transparent"))
+dat_freq
+
+# ggsave("figures/a2_fig3dat_print.svg", dat_freq, width = 7.6, height = 4.2)
+
+
+gen_freq <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_sf(aes(fill = rel_freq_pmt), alpha = .7, colour = "black",
+          data = hex_grid_sample |>
+            dplyr::filter(cat == "Genitivus possessivus")) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  geom_count(aes(x = longitude, y = latitude),
+             colour = rgb(.5, .5, .5),
+             alpha = .7,
+             data = sample_geo |>
+               filter(cat == "Genitivus possessivus")) +
+  scale_fill_viridis_c(direction = -1) +
+  scale_colour_grey() +
+  scale_radius(range = c(1, 4)) +
+  labs(fill = "Relative Häufigkeit (pMT)",
+       x = "Längengrad", y = "Breitengrad",
+       size = "Absolute Häufigkeit") +
+  guides(size = guide_legend(order = 1)) +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)),
+        legend.key = element_rect(fill = "transparent"))
+gen_freq
+
+# ggsave("figures/a2_fig3gen_print.svg", gen_freq, width = 7.6, height = 4.2)
+
+```
+
+Nur bis 1700:
+```{r}
+#| message: false
+min_x <- min(sample_geo$longitude) - .5
+max_x <- max(sample_geo$longitude) + .5
+min_y <- min(sample_geo$latitude) - .5
+max_y <- max(sample_geo$latitude) + .5
+
+sample_geo_pre1700 <- sample_gold |>
+  select(match:sentence, basename) |>
+  inner_join(dta_geo |> filter(year < 1700), by = "basename")
+
+sample_geo_sf_pre1700 <- sample_geo_pre1700 |>
+  st_as_sf(coords = c("longitude", "latitude"))
+st_crs(sample_geo_sf_pre1700) <- 4326
+
+sample_by_hex_pre1700 <- sample_geo_sf_pre1700 |>
+  dplyr::mutate(cat = factor(cat,
+                             levels = c("Dativus possessivus",
+                                          "synt. mehrdeutig, Tendenz zu Dat.",
+                                          "syntaktisch mehrdeutig",
+                                          "synt. mehrdeutig, Tendenz zu nein",
+                                          "synt. mehrdeutig; Gen./Dat. poss.",
+                                          "Gen./Dat. poss.",
+                                          "Genitivus possessivus"),
+                             labels = c("Dativus possessivus",
+                                          "Dativus possessivus", # synt. mehrdeutig, Tendenz zu Dat. poss.
+                                          "syntaktisch mehrdeutig",
+                                          "synt. mehrdeutig, Tendenz zu nein",
+                                          "syntaktisch mehrdeutig", # synt. mehrdeutig, Gen./Dat. poss.
+                                          "Gen./Dat. poss.",
+                                          "Genitivus possessivus")
+                             )) |>
+  st_join(hex_grid) |>
+  select(-tokens) |>
+  left_join(tokens_by_hex_pre1700, by = "hex_id") |>
+  summarise(rel_freq_pmt = n() / tokens * 1e6, .by = c(hex_id, cat))
+
+hex_grid_sample_pre1700 <- hex_grid |>
+  dplyr::left_join(sample_by_hex_pre1700) |>
+  dplyr::mutate(rel_freq_pmt = replace_na(rel_freq_pmt, 0)) |>
+  dplyr::filter(rel_freq_pmt > 0)
+
+dat_freq_pre1700 <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_sf(aes(fill = rel_freq_pmt), alpha = .7, colour = "black",
+          data = hex_grid_sample_pre1700 |>
+            dplyr::filter(cat == "Dativus possessivus")) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  geom_count(aes(x = longitude, y = latitude, colour = cat),
+             alpha = .7,
+             data = sample_geo_pre1700 |>
+               filter(cat %in% c("Dativus possessivus", "synt. mehrdeutig, Tendenz zu Dat."))) +
+  scale_fill_viridis_c(direction = -1) +
+  scale_colour_grey(start = 0, end = .5) +
+  scale_radius(range = c(1, 4), breaks = round) +
+  labs(fill = "Relative Häufigkeit (pMT)",
+       x = "Längengrad", y = "Breitengrad",
+       size = "Absolute Häufigkeit",
+       colour = "Kategorie") +
+  guides(colour = guide_legend(order = 1),
+         size = guide_legend(order = 2)) +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)),
+        legend.key = element_rect(fill = "transparent"))
+dat_freq_pre1700
+
+# ggsave("figures/a2_fig3dat_pre1700_print.svg", dat_freq_pre1700, width = 7.6, height = 4.2)
+
+
+gen_freq_pre1700 <- ggplot() +
+  geom_sf(data = world, fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_sf(aes(fill = rel_freq_pmt), alpha = .7, colour = "black",
+          data = hex_grid_sample_pre1700 |>
+            dplyr::filter(cat == "Genitivus possessivus")) +
+  # scale_fill_gradient(low = "#DDDDDD", high = "#333333")
+  geom_count(aes(x = longitude, y = latitude),
+             colour = rgb(.5, .5, .5),
+             alpha = .7,
+             data = sample_geo_pre1700 |>
+               filter(cat == "Genitivus possessivus")) +
+  scale_fill_viridis_c(direction = -1) +
+  scale_colour_grey() +
+  scale_radius(range = c(1, 4)) +
+  labs(fill = "Relative Häufigkeit (pMT)",
+       x = "Längengrad", y = "Breitengrad",
+       size = "Absolute Häufigkeit") +
+  guides(size = guide_legend(order = 1)) +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)),
+        legend.key = element_rect(fill = "transparent"))
+gen_freq_pre1700
+
+# ggsave("figures/a2_fig3gen_pre1700_print.svg", gen_freq_pre1700, width = 7.6, height = 4.2)
+
+```
+
+Zeitliche Abfolge der Belege für possessiven Dativ und Genitiv (vor 1700):
+```{r}
+sample_geo_pre1700 <- sample_geo_pre1700 |>
+  mutate(period = cut(year, breaks = seq(1450, 1700, by = 50)))
+levels(sample_geo_pre1700$period) <- c("1450–1599", "1450–1599", "1450–1599",
+                                       "1600–1649", "1650–1699")
+
+abfolge <- ggplot(data = world) +
+  geom_sf(fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_text(aes(label = year_n,
+                x = longitude,
+                y = latitude,
+                colour = cat,
+                alpha = alpha_t),
+            position = position_jitter(width = .2, height = .2),
+            size = 3,
+            key_glyph = draw_key_rect,
+            data = sample_geo_pre1700 |>
+              filter(cat %in% c("Dativus possessivus",
+                                "synt. mehrdeutig, Tendenz zu Dat.",
+                                "Genitivus possessivus")) |>
+              reframe(year_n = ifelse(n() > 1,
+                                      str_c(year, " (", n(), ")"),
+                                      as.character(year)),
+                      .by = c(latitude, longitude, cat, period, year)) |>
+              mutate(alpha_t = ifelse(cat != "Genitivus possessivus", .7, .5))) +
+  labs(x = "Längengrad", y = "Breitengrad", colour = "") +
+  facet_wrap(vars(period)) +
+  scale_colour_viridis_d(end = .8) +
+  scale_alpha_continuous(range = c(.5, .7), guide = "none") +
+  theme(legend.position = "bottom",
+        panel.background = element_rect(fill = rgb(0, .2, .5, .2)),
+        legend.key.spacing.x = unit(1, "cm"))
+
+abfolge
+
+# ggsave("figures/a2_fig4_print.svg", abfolge, width = 8.4, height = 4.2)
+```
+
+Animierte Version über den gesamten Betrachtungszeitraum:
+```{r}
+sample_geo <- sample_geo |>
+  mutate(period = cut(year, breaks = seq(1450, 1900, by = 50)))
+levels(sample_geo$period) <- c("1450–1599", "1450–1599", "1450–1599",
+                               "1600–1649", "1650–1699", "1700–1749",
+                               "1750–1799", "1800–1849", "1850–1899")
+abfolge2 <- ggplot(data = world) +
+  geom_sf(fill = "white") +
+  scale_x_continuous(limits = c(min_x, max_x)) +
+  scale_y_continuous(limits = c(min_y, max_y)) +
+  geom_text(aes(label = factor(year_n),
+                x = longitude,
+                y = latitude,
+                colour = cat),
+            position = position_jitter(width = .2, height = .2),
+            alpha = .7,
+            size = 6,
+            key_glyph = draw_key_rect,
+            data = sample_geo |>
+              filter(cat %in% c("Dativus possessivus",
+                                "synt. mehrdeutig, Tendenz zu Dat.",
+                                "Genitivus possessivus")) |>
+              reframe(year_n = ifelse(n() > 1,
+                                      str_c(year, " (", n(), ")"),
+                                      as.character(year)),
+                      .by = c(latitude, longitude, cat, period, year))) +
+  scale_colour_viridis_d(end = .8) +
+  labs(x = "Längengrad", y = "Breitengrad", colour = "Kategorie") +
+  theme(panel.background = element_rect(fill = rgb(0, .2, .5, .2)))
+
+map_with_animation <- abfolge2 +
+  transition_states(period, transition_length = .75, state_length = 1) +
+  ggtitle('Zeitraum: {closest_state}') +
+  theme(plot.title = element_text(size = 24, face = "bold"),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        axis.title = element_text(size = 16)) +
+  enter_fade() +
+  exit_fade()
+
+# gif <- animate(map_with_animation, width = 1000, height = 800, fps = 5)
+# anim_save("figures/animated_map.gif", gif)
+```
+
+![](figures/a2_animated_map.gif){fig-alt="Animierte Karte" width=1000 height=800}
+
+Interaktive Karte (alle Punkte leicht zufällig variiert, um Überlappungen zu vermeiden), die sich beliebig zoomen und verschieben lässt und bei einem Klick auf einen einzelnen Punkt die jeweiligen Metadaten und Annotationen anzeigt:
+```{r}
+#| message: false
+
+map_data <- sample_geo_sf |>
+  dplyr::mutate(kwic = str_extract(sentence, r"(([^[:space:]]+ ){0,3}--->.+?<---( [^[:space:]]+){0,3})") |>
+                  str_remove_all("--->|<---"),
+                period = cut(year, breaks = seq(1450, 1900, by = 50)),
+                year = as.character(year))
+levels(map_data$period) <- c("1450–1599", "1450–1599", "1450–1599",
+                             "1600–1649", "1650–1699", "1700–1749",
+                             "1750–1799", "1800–1849", "1850–1899")
+
+tmap_mode("view")
+tm_basemap("OpenStreetMap") +
+  tm_shape(world,
+           bbox = c(left = min_x - .5,
+                    bottom = min_y - .5,
+                    right = max_x + .5,
+                    top = max_y + .5)) +
+  tm_fill(col = "white", alpha = .5, popup.vars = FALSE, group = "Länder", id = "name_long") +
+  tm_borders(col = "black") +
+  tm_shape(map_data |>
+             dplyr::filter(cat %in% c("Dativus possessivus",
+                                      "synt. mehrdeutig, Tendenz zu Dat.",
+                                      "Genitivus possessivus")) |>
+             dplyr::mutate(cat = factor(cat))) +
+  tm_dots(col = "cat", size = .1, group = "Kategorie",
+          jitter = .1,
+          title = "Kategorie",
+          popup.vars = c("kwic", "cat",
+                         "genus_possessor", "genus_possessum",
+                         "numerus_possessor", "numerus_possessum",
+                         "animacy_possessor", "animacy_possessum",
+                         "basename",
+                         "name", "translation", "place_of_birth",
+                         "comment", "year", "coords_birth")) +
+  tm_scale_bar() +
+  tm_layout(bg.color = rgb(0, .2, .5, .2))
+```
+
